@@ -1,16 +1,6 @@
-import { Installation } from "@/installation"
 import { Provider } from "@/provider/provider"
 import { Log } from "@/util/log"
-import {
-  streamText,
-  wrapLanguageModel,
-  type ModelMessage,
-  type StreamTextResult,
-  type Tool,
-  type ToolSet,
-  tool,
-  jsonSchema,
-} from "ai"
+import { streamText, wrapLanguageModel, type ModelMessage, type Tool, tool, jsonSchema } from "ai"
 import { mergeDeep, pipe } from "remeda"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -23,6 +13,7 @@ import { SystemPrompt } from "./system"
 import { Flag } from "@/flag/flag"
 import { Permission } from "@/permission"
 import { Auth } from "@/auth"
+import { Installation } from "@/installation"
 
 export namespace LLM {
   const log = Log.create({ service: "llm" })
@@ -42,8 +33,6 @@ export namespace LLM {
     retries?: number
     toolChoice?: "auto" | "required" | "none"
   }
-
-  export type StreamOutput = StreamTextResult<ToolSet, unknown>
 
   export async function stream(input: StreamInput) {
     const l = log
@@ -191,31 +180,32 @@ export namespace LLM {
     // Wire up toolExecutor for DWS workflow models so that tool calls
     // from the workflow service are executed via opencode's tool system
     // and results sent back over the WebSocket.
-    if (language instanceof GitLabWorkflowLanguageModel) {
-      const workflowModel = language
-      workflowModel.systemPrompt = system.join("\n")
-      workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {
-        const t = tools[toolName]
-        if (!t || !t.execute) {
-          return { result: "", error: `Unknown tool: ${toolName}` }
-        }
-        try {
-          const result = await t.execute!(JSON.parse(argsJson), {
-            toolCallId: _requestID,
-            messages: input.messages,
-            abortSignal: input.abort,
-          })
-          const output = typeof result === "string" ? result : (result?.output ?? JSON.stringify(result))
-          return {
-            result: output,
-            metadata: typeof result === "object" ? result?.metadata : undefined,
-            title: typeof result === "object" ? result?.title : undefined,
-          }
-        } catch (e: any) {
-          return { result: "", error: e.message ?? String(e) }
-        }
-      }
-    }
+    // TODO: fix this once v6 is ready
+    // if (language instanceof GitLabWorkflowLanguageModel) {
+    //   const workflowModel = language
+    //   workflowModel.systemPrompt = system.join("\n")
+    //   workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {
+    //     const t = tools[toolName]
+    //     if (!t || !t.execute) {
+    //       return { result: "", error: `Unknown tool: ${toolName}` }
+    //     }
+    //     try {
+    //       const result = await t.execute!(JSON.parse(argsJson), {
+    //         toolCallId: _requestID,
+    //         messages: input.messages,
+    //         abortSignal: input.abort,
+    //       })
+    //       const output = typeof result === "string" ? result : (result?.output ?? JSON.stringify(result))
+    //       return {
+    //         result: output,
+    //         metadata: typeof result === "object" ? result?.metadata : undefined,
+    //         title: typeof result === "object" ? result?.title : undefined,
+    //       }
+    //     } catch (e: any) {
+    //       return { result: "", error: e.message ?? String(e) }
+    //     }
+    //   }
+    // }
 
     return streamText({
       onError(error) {
@@ -273,8 +263,10 @@ export namespace LLM {
         model: language,
         middleware: [
           {
+            specificationVersion: "v3" as const,
             async transformParams(args) {
               if (args.type === "stream") {
+                // TODO: verify that LanguageModelV3Prompt is still compat here!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                 // @ts-expect-error
                 args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options)
               }
