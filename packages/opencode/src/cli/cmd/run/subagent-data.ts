@@ -291,10 +291,24 @@ function metadata(part: ToolPart, key: string) {
   return ("metadata" in part.state ? part.state.metadata?.[key] : undefined) ?? part.metadata?.[key]
 }
 
-function taskTab(part: ToolPart, sessionID: string): FooterSubagentTab {
-  const label = Locale.titlecase(text(part.state.input.subagent_type) ?? "general")
-  const description = text(part.state.input.description) ?? stateTitle(part) ?? inputLabel(part.state.input) ?? ""
-  const status = part.state.status === "error" ? "error" : part.state.status === "completed" ? "completed" : "running"
+function taskTab(part: ToolPart, sessionID: string, child?: Record<string, unknown>): FooterSubagentTab {
+  const label = Locale.titlecase(text(child?.subagent_type) ?? text(part.state.input.subagent_type) ?? "general")
+  const description =
+    text(child?.description) ??
+    text(child?.item) ??
+    text(part.state.input.description) ??
+    stateTitle(part) ??
+    inputLabel(part.state.input) ??
+    ""
+  const childStatus = text(child?.status)
+  const status =
+    childStatus === "error" || childStatus === "completed"
+      ? childStatus
+      : part.state.status === "error"
+        ? "error"
+        : part.state.status === "completed"
+          ? "completed"
+          : "running"
 
   return {
     sessionID,
@@ -304,7 +318,11 @@ function taskTab(part: ToolPart, sessionID: string): FooterSubagentTab {
     description,
     status,
     title: stateTitle(part),
-    toolCalls: num(metadata(part, "toolcalls")) ?? num(metadata(part, "toolCalls")) ?? num(metadata(part, "calls")),
+    toolCalls:
+      num(child?.toolCalls) ??
+      num(metadata(part, "toolcalls")) ??
+      num(metadata(part, "toolCalls")) ??
+      num(metadata(part, "calls")),
     lastUpdatedAt: stateUpdatedAt(part),
   }
 }
@@ -313,7 +331,38 @@ function taskSessionID(part: ToolPart) {
   return text(metadata(part, "sessionId")) ?? text(metadata(part, "sessionID"))
 }
 
+function fanoutChildren(part: ToolPart) {
+  const children = metadata(part, "children")
+  if (!Array.isArray(children)) return []
+  return children.flatMap((child) => {
+    if (!child || typeof child !== "object") return []
+    const sessionID = text((child as Record<string, unknown>).sessionId) ?? text((child as Record<string, unknown>).sessionID)
+    if (!sessionID) return []
+    return [{ sessionID, child: child as Record<string, unknown> }]
+  })
+}
+
 function syncTaskTab(data: SubagentData, part: ToolPart, children?: Set<string>) {
+  if (part.tool === "task_fanout") {
+    let changed = false
+    for (const item of fanoutChildren(part)) {
+      if (children && children.size > 0 && !children.has(item.sessionID)) {
+        continue
+      }
+
+      const next = taskTab(part, item.sessionID, item.child)
+      if (sameSubagentTab(data.tabs.get(item.sessionID), next)) {
+        ensureDetail(data, item.sessionID)
+        continue
+      }
+
+      data.tabs.set(item.sessionID, next)
+      ensureDetail(data, item.sessionID)
+      changed = true
+    }
+    return changed
+  }
+
   if (part.tool !== "task") {
     return false
   }

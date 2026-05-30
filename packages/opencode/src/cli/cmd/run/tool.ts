@@ -28,7 +28,7 @@ import type { PlanExitTool } from "@/tool/plan"
 import type { QuestionTool } from "@/tool/question"
 import type { ReadTool } from "@/tool/read"
 import type { SkillTool } from "@/tool/skill"
-import type { TaskTool } from "@/tool/task"
+import type { FanoutTaskTool, TaskTool } from "@/tool/task"
 import type { TodoWriteTool } from "@/tool/todo"
 import type { WebFetchTool } from "@/tool/webfetch"
 import { webSearchProviderLabel, type WebSearchTool } from "@/tool/websearch"
@@ -99,6 +99,7 @@ type ToolDefs = {
   apply_patch: typeof ApplyPatchTool
   batch: Tool.Info
   task: typeof TaskTool
+  task_fanout: typeof FanoutTaskTool
   todowrite: typeof TodoWriteTool
   question: typeof QuestionTool
   read: typeof ReadTool
@@ -374,6 +375,18 @@ function runTask(p: ToolProps<typeof TaskTool>): ToolInline {
   }
 }
 
+function runTaskFanout(p: ToolProps<typeof FanoutTaskTool>): ToolInline {
+  const total = num(p.metadata.total) ?? list(p.input.items).length
+  const completed = num(p.metadata.completed) ?? 0
+  const failed = num(p.metadata.failed) ?? 0
+  const icon = p.frame.status === "error" || failed > 0 ? "✗" : p.frame.status === "running" ? "•" : "✓"
+  return {
+    icon,
+    title: p.input.description || "Fanout Task",
+    description: total > 0 ? `${completed}/${total} done${failed > 0 ? `, ${failed} failed` : ""}` : undefined,
+  }
+}
+
 function runTodo(p: ToolProps<typeof TodoWriteTool>): ToolInline {
   return {
     icon: "#",
@@ -578,6 +591,26 @@ function snapTask(p: ToolProps<typeof TaskTool>): ToolSnapshot {
     kind: "task",
     title: `# ${kind} Task`,
     rows,
+    tail: "",
+  }
+}
+
+function snapTaskFanout(p: ToolProps<typeof FanoutTaskTool>): ToolSnapshot {
+  const total = num(p.metadata.total) ?? list(p.input.items).length
+  const completed = num(p.metadata.completed) ?? 0
+  const failed = num(p.metadata.failed) ?? 0
+  const running = num(p.metadata.running) ?? 0
+  const pending = num(p.metadata.pending) ?? 0
+  return {
+    kind: "task",
+    title: "# Fanout Task",
+    rows: [
+      p.input.description,
+      total > 0 ? `${completed}/${total} completed` : undefined,
+      running > 0 ? `${running} running` : undefined,
+      pending > 0 ? `${pending} pending` : undefined,
+      failed > 0 ? `${failed} failed` : undefined,
+    ].filter((item): item is string => Boolean(item)),
     tail: "",
   }
 }
@@ -790,6 +823,24 @@ function scrollTaskFinal(p: ToolProps<typeof TaskTool>): string {
   return `# ${kind} Task\n${row}`
 }
 
+function scrollTaskFanoutFinal(p: ToolProps<typeof FanoutTaskTool>): string {
+  if (p.frame.status === "error") {
+    return fail(p.frame)
+  }
+
+  const total = num(p.metadata.total) ?? list(p.input.items).length
+  const completed = num(p.metadata.completed) ?? 0
+  const failed = num(p.metadata.failed) ?? 0
+  const row = p.input.description || text(p.frame.state.title)
+  return [
+    "# Fanout Task",
+    row,
+    total > 0 ? `${completed}/${total} completed${failed > 0 ? ` · ${failed} failed` : ""}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
 function scrollTodoStart(_: ToolProps<typeof TodoWriteTool>): string {
   return ""
 }
@@ -987,6 +1038,20 @@ function permTask(p: ToolPermissionProps<typeof TaskTool>): ToolPermissionInfo {
   }
 }
 
+function permTaskFanout(p: ToolPermissionProps<typeof FanoutTaskTool>): ToolPermissionInfo {
+  const type = p.input.subagent_type || "general"
+  const desc = p.input.description
+  const total = list(p.input.items).length
+  return {
+    icon: "#",
+    title: `${Locale.titlecase(type)} Fanout`,
+    lines: [
+      desc ? `◉ ${desc}` : undefined,
+      total > 0 ? `${total} explicit item${total === 1 ? "" : "s"}` : undefined,
+    ].filter((item): item is string => Boolean(item)),
+  }
+}
+
 function permWebfetch(p: ToolPermissionProps<typeof WebFetchTool>): ToolPermissionInfo {
   const url = p.input.url || ""
   return {
@@ -1107,6 +1172,20 @@ const TOOL_RULES = {
       final: scrollTaskFinal,
     },
     permission: permTask,
+  },
+  task_fanout: {
+    view: {
+      output: false,
+      final: true,
+      snap: "structured",
+    },
+    run: runTaskFanout,
+    snap: snapTaskFanout,
+    scroll: {
+      start: scrollTaskStart,
+      final: scrollTaskFanoutFinal,
+    },
+    permission: permTaskFanout,
   },
   todowrite: {
     view: {

@@ -47,7 +47,7 @@ import type { EditTool } from "@/tool/edit"
 import type { ApplyPatchTool } from "@/tool/apply_patch"
 import type { WebFetchTool } from "@/tool/webfetch"
 import { webSearchProviderLabel, type WebSearchTool } from "@/tool/websearch"
-import type { TaskTool } from "@/tool/task"
+import type { FanoutTaskTool, TaskTool } from "@/tool/task"
 import type { QuestionTool } from "@/tool/question"
 import type { SkillTool } from "@/tool/skill"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
@@ -1446,7 +1446,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           )
         }}
       </For>
-      <Show when={props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
+      <Show when={props.parts.some((x) => x.type === "tool" && (x.tool === "task" || x.tool === "task_fanout"))}>
         <box paddingTop={1} paddingLeft={3}>
           <text fg={theme.text}>
             {childShortcut()}
@@ -1682,6 +1682,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
         <Match when={props.part.tool === "task"}>
           <Task {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "task_fanout"}>
+          <TaskFanout {...toolprops} />
         </Match>
         <Match when={props.part.tool === "apply_patch"}>
           <ApplyPatch {...toolprops} />
@@ -2125,6 +2128,61 @@ function Task(props: ToolProps<typeof TaskTool>) {
         if (props.metadata.sessionId) {
           navigate({ type: "session", sessionID: props.metadata.sessionId })
         }
+      }}
+    >
+      {content()}
+    </InlineTool>
+  )
+}
+
+function TaskFanout(props: ToolProps<typeof FanoutTaskTool>) {
+  const { navigate } = useRoute()
+  const sync = useSync()
+
+  const children = createMemo(() => {
+    const value = props.metadata.children
+    if (!Array.isArray(value)) return []
+    return value.flatMap((child) => {
+      if (!child || typeof child !== "object") return []
+      const item = child as { sessionId?: string; sessionID?: string; description?: string; status?: string }
+      const sessionID = item.sessionId ?? item.sessionID
+      if (!sessionID) return []
+      return [{ ...item, sessionID }]
+    })
+  })
+
+  createEffect(() => {
+    for (const child of children()) {
+      if (!sync.data.message[child.sessionID]?.length) void sync.session.sync(child.sessionID)
+    }
+  })
+
+  const total = createMemo(() => props.metadata.total ?? children().length)
+  const completed = createMemo(() => props.metadata.completed ?? children().filter((child) => child.status === "completed").length)
+  const failed = createMemo(() => props.metadata.failed ?? children().filter((child) => child.status === "error").length)
+  const running = createMemo(() => props.metadata.running ?? children().filter((child) => child.status === "running").length)
+  const pending = createMemo(() => props.metadata.pending ?? children().filter((child) => child.status === "pending").length)
+  const isRunning = createMemo(() => props.part.state.status === "running")
+  const firstChild = createMemo(() => children()[0]?.sessionID)
+  const content = createMemo(() => {
+    const lines = [`${Locale.titlecase(props.input.subagent_type ?? "General")} Fanout — ${props.input.description ?? "fanout"}`]
+    lines.push(`↳ ${completed()}/${total()} completed`)
+    if (running()) lines.push(`↳ ${running()} running`)
+    if (pending()) lines.push(`↳ ${pending()} pending`)
+    if (failed()) lines.push(`↳ ${failed()} failed`)
+    return lines.join("\n")
+  })
+
+  return (
+    <InlineTool
+      icon="│"
+      spinner={isRunning()}
+      complete={props.input.description}
+      pending="Fanning out..."
+      part={props.part}
+      onClick={() => {
+        const sessionID = firstChild()
+        if (sessionID) navigate({ type: "session", sessionID })
       }}
     >
       {content()}

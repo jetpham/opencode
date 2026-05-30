@@ -6,7 +6,7 @@ import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
-import { TaskTool } from "./task"
+import { FanoutTaskTool, TaskTool } from "./task"
 import { TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
@@ -61,19 +61,21 @@ export function webSearchEnabled(providerID: ProviderID, flags = { exa: false, p
 }
 
 type TaskDef = Tool.InferDef<typeof TaskTool>
+type FanoutTaskDef = Tool.InferDef<typeof FanoutTaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
 
 type State = {
   custom: Tool.Def[]
   builtin: Tool.Def[]
   task: TaskDef
+  task_fanout: FanoutTaskDef
   read: ReadDef
 }
 
 export interface Interface {
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
-  readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
+  readonly named: () => Effect.Effect<{ task: TaskDef; task_fanout: FanoutTaskDef; read: ReadDef }>
   readonly tools: (model: { providerID: ProviderID; modelID: ModelID; agent: Agent.Info }) => Effect.Effect<Tool.Def[]>
 }
 
@@ -116,6 +118,7 @@ export const layer: Layer.Layer<
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
+    const taskFanout = yield* FanoutTaskTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
@@ -231,6 +234,7 @@ export const layer: Layer.Layer<
           edit: Tool.init(edit),
           write: Tool.init(writetool),
           task: Tool.init(task),
+          task_fanout: Tool.init(taskFanout),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           search: Tool.init(websearch),
@@ -255,6 +259,7 @@ export const layer: Layer.Layer<
             tool.edit,
             tool.write,
             tool.task,
+            tool.task_fanout,
             tool.fetch,
             tool.todo,
             tool.search,
@@ -265,6 +270,7 @@ export const layer: Layer.Layer<
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
           task: tool.task,
+          task_fanout: tool.task_fanout,
           read: tool.read,
         }
       }),
@@ -345,7 +351,7 @@ export const layer: Layer.Layer<
             id: tool.id,
             description: [
               output.description,
-              tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined,
+              tool.id === TaskTool.id || tool.id === FanoutTaskTool.id ? yield* describeTask(input.agent) : undefined,
               tool.id === SkillTool.id ? yield* describeSkill(input.agent) : undefined,
             ]
               .filter(Boolean)
@@ -362,7 +368,7 @@ export const layer: Layer.Layer<
 
     const named: Interface["named"] = Effect.fn("ToolRegistry.named")(function* () {
       const s = yield* InstanceState.get(state)
-      return { task: s.task, read: s.read }
+      return { task: s.task, task_fanout: s.task_fanout, read: s.read }
     })
 
     return Service.of({ ids, all, named, tools })
