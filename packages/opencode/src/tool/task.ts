@@ -383,19 +383,22 @@ export const FanoutTaskTool = Tool.define(
         }
       })
 
+      let reduceEntry: FanoutEntry | undefined
+      const allEntries = () => (reduceEntry ? [...entries, reduceEntry] : entries)
       const counts = () => {
-        const completed = entries.filter((entry) => entry.status === "completed").length
-        const failed = entries.filter((entry) => entry.status === "error").length
-        const running = entries.filter((entry) => entry.status === "running").length
-        const pending = entries.filter((entry) => entry.status === "pending").length
+        const counted = allEntries()
+        const completed = counted.filter((entry) => entry.status === "completed").length
+        const failed = counted.filter((entry) => entry.status === "error").length
+        const running = counted.filter((entry) => entry.status === "running").length
+        const pending = counted.filter((entry) => entry.status === "pending").length
         return { completed, failed, running, pending }
       }
       const metadata = () => {
         const c = counts()
         return {
           parentSessionId: ctx.sessionID,
-          sessionIds: entries.flatMap((entry) => (entry.session ? [entry.session.id] : [])),
-          children: entries.flatMap((entry) =>
+          sessionIds: allEntries().flatMap((entry) => (entry.session ? [entry.session.id] : [])),
+          children: allEntries().flatMap((entry) =>
             entry.session
               ? [
                   {
@@ -409,8 +412,9 @@ export const FanoutTaskTool = Tool.define(
                 ]
               : [],
           ),
-          total,
-          toolCalls: total,
+          total: total + (reduceEntry ? 1 : 0),
+          fanoutTotal: total,
+          toolCalls: total + (reduceEntry ? 1 : 0),
           completed: c.completed,
           failed: c.failed,
           running: c.running,
@@ -478,7 +482,7 @@ export const FanoutTaskTool = Tool.define(
 
       const runReduce = Effect.fn("FanoutTaskTool.runReduce")(function* () {
         if (!params.reduce_prompt || !reducer) return undefined
-        const reduceEntry: FanoutEntry = {
+        reduceEntry = {
           item: "reduce",
           absoluteItem: discovered.baseDir,
           index: total,
@@ -492,6 +496,7 @@ export const FanoutTaskTool = Tool.define(
           permission: sessionPermission(reducer),
         })
         reduceEntry.status = "running"
+        yield* updateMetadata()
         const parts = yield* ops.resolvePromptParts(reduceEntry.prompt)
         const result = yield* ops.prompt({
           messageID: MessageID.ascending(),
@@ -506,6 +511,7 @@ export const FanoutTaskTool = Tool.define(
         })
         reduceEntry.output = latestAssistantText(result)
         reduceEntry.status = "completed"
+        yield* updateMetadata()
         return reduceEntry
       })
 
