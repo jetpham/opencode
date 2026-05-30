@@ -1,10 +1,14 @@
 import { afterEach, describe, expect } from "bun:test"
+import { $ } from "bun"
 import { Effect, Exit, Fiber, Layer } from "effect"
+import * as fs from "fs/promises"
+import path from "path"
 import { Agent } from "../../src/agent/agent"
 import { BackgroundJob } from "@/background/job"
 import { Bus } from "@/bus"
 import { Config } from "@/config/config"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import { Git } from "@/git"
 import { Session } from "@/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
 import type { SessionPrompt } from "../../src/session/prompt"
@@ -12,11 +16,11 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { ModelID, ProviderID } from "../../src/provider/schema"
-import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import { FanoutTaskTool, TaskTool, type TaskPromptOps } from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { disposeAllInstances } from "../fixture/fixture"
+import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 afterEach(async () => {
@@ -35,6 +39,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     Bus.defaultLayer,
     Config.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
+    Git.defaultLayer,
     Session.defaultLayer,
     SessionRunState.defaultLayer,
     SessionStatus.defaultLayer,
@@ -201,6 +206,56 @@ describe("tool.task", () => {
         },
       },
     },
+  )
+
+  it.instance(
+    "fanout discovery keeps files when exclude is omitted and ignores non-positive limit",
+    () =>
+      Effect.gen(function* () {
+        const instance = yield* TestInstance
+        yield* Effect.promise(() => fs.mkdir(path.join(instance.directory, "src"), { recursive: true }))
+        yield* Effect.promise(() => Bun.write(path.join(instance.directory, "root.txt"), "root"))
+        yield* Effect.promise(() => Bun.write(path.join(instance.directory, "src", "nested.txt"), "nested"))
+        yield* Effect.promise(() => $`git add root.txt src/nested.txt`.cwd(instance.directory).quiet())
+
+        const { chat, assistant } = yield* seed()
+        const tool = yield* FanoutTaskTool
+        const def = yield* tool.init()
+        const prompts: string[] = []
+        const result = yield* def.execute(
+          {
+            description: "audit files",
+            prompt_template: "inspect {item}",
+            subagent_type: "general",
+            include: ["**/*"],
+            exclude: [],
+            base_dir: ".",
+            git_tracked: true,
+            limit: 0,
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: {
+              promptOps: stubOps({
+                onPrompt: (input) => {
+                  const part = input.parts[0]
+                  if (part?.type === "text") prompts.push(part.text)
+                },
+              }),
+            },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(result.metadata.fanoutTotal).toBe(2)
+        expect(prompts.sort()).toEqual(["inspect root.txt", "inspect src/nested.txt"])
+      }),
+    { git: true },
   )
 
   it.instance("execute resumes an existing task session from task_id", () =>

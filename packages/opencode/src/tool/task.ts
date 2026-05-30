@@ -201,6 +201,10 @@ function matchesAny(base: string, item: string, patterns: string[]) {
   return patterns.some((pattern) => candidates.some((candidate) => Glob.match(pattern, candidate)))
 }
 
+function matchesExclude(base: string, item: string, patterns: string[]) {
+  return patterns.length > 0 && matchesAny(base, item, patterns)
+}
+
 function fillFanoutTemplate(
   template: string,
   entry: Pick<FanoutEntry, "item" | "absoluteItem" | "index">,
@@ -271,7 +275,7 @@ export const FanoutTaskTool = Tool.define(
         }
       }
       return [...found]
-        .filter((item) => !matchesAny(baseDir, item, exclude))
+        .filter((item) => !matchesExclude(baseDir, item, exclude))
         .sort((a, b) => a.localeCompare(b))
     })
 
@@ -281,7 +285,7 @@ export const FanoutTaskTool = Tool.define(
       const include = stringList(params.include)
       const exclude = stringList(params.exclude)
       const gitTracked = params.git_tracked !== false
-      const limit = params.limit === undefined ? undefined : Math.max(0, Math.floor(params.limit))
+      const limit = params.limit === undefined ? undefined : Math.floor(params.limit)
 
       let items = explicit
       if (items.length === 0) {
@@ -292,12 +296,12 @@ export const FanoutTaskTool = Tool.define(
         items = tracked
           ? tracked
               .filter((item) => matchesAny(baseDir, item, include))
-              .filter((item) => !matchesAny(baseDir, item, exclude))
+              .filter((item) => !matchesExclude(baseDir, item, exclude))
               .sort((a, b) => a.localeCompare(b))
           : yield* scanGlobItems(baseDir, include, exclude)
       }
 
-      if (limit !== undefined) items = items.slice(0, limit)
+      if (limit !== undefined && Number.isFinite(limit) && limit > 0) items = items.slice(0, limit)
       if (items.length === 0) return yield* Effect.fail(new Error("task_fanout found no items to process"))
       return { baseDir, include, exclude, gitTracked, items }
     })
